@@ -7,6 +7,8 @@ import { INFINITE_QUERY_LIMIT } from "@/config/infinite-query";
 import { absoluteUrl } from "@/lib/utils";
 import { getUserSubscriptionPlan, stripe } from "@/lib/stripe";
 import { PLANS } from "@/config/stripe";
+import { and, desc, eq } from "drizzle-orm";
+import { files, messages, users } from "@/db/schema";
 
 export const appRouter = router({
   authCallback: publicProcedure.query(async () => {
@@ -16,19 +18,15 @@ export const appRouter = router({
     if (!user.id || !user.email) throw new TRPCError({ code: "UNAUTHORIZED" });
 
     // check if the user is in the database
-    const dbUser = await db.user.findFirst({
-      where: {
-        id: user.id,
-      },
+    const dbUser = await db.query.users.findFirst({
+      where: eq(users.id, user.id),
     });
 
     if (!dbUser) {
       // create user in db
-      await db.user.create({
-        data: {
-          id: user.id,
-          email: user.email,
-        },
+      await db.insert(users).values({
+        id: user.id,
+        email: user.email,
       });
     }
 
@@ -37,10 +35,8 @@ export const appRouter = router({
   getUserFiles: privateProcedure.query(async ({ ctx }) => {
     const { userId } = ctx;
 
-    return await db.file.findMany({
-      where: {
-        userId,
-      },
+    return await db.query.files.findMany({
+      where: eq(files.userId, userId),
     });
   }),
 
@@ -51,10 +47,8 @@ export const appRouter = router({
 
     if (!userId) throw new TRPCError({ code: "UNAUTHORIZED" });
 
-    const dbUser = await db.user.findFirst({
-      where: {
-        id: userId,
-      },
+    const dbUser = await db.query.users.findFirst({
+      where: eq(users.id, userId),
     });
 
     if (!dbUser) throw new TRPCError({ code: "UNAUTHORIZED" });
@@ -94,7 +88,7 @@ export const appRouter = router({
     .input(
       z.object({
         limit: z.number().min(1).max(100).nullish(),
-        cursor: z.string().nullish(),
+        cursor: z.number().nullish(),
         fileId: z.string(),
       })
     )
@@ -103,40 +97,29 @@ export const appRouter = router({
       const { fileId, cursor } = input;
       const limit = input.limit ?? INFINITE_QUERY_LIMIT;
 
-      const file = await db.file.findFirst({
-        where: {
-          id: fileId,
-          userId,
-        },
+      const file = await db.query.files.findFirst({
+        where: and(eq(files.id, fileId), eq(files.userId, userId)),
       });
 
       if (!file) throw new TRPCError({ code: "NOT_FOUND" });
 
-      const messages = await db.message.findMany({
-        take: limit + 1,
-        where: {
-          fileId,
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-        cursor: cursor ? { id: cursor } : undefined,
-        select: {
+      const fileMessages = await db.query.messages.findMany({
+        columns: {
           id: true,
           isUserMessage: true,
           createdAt: true,
           text: true,
         },
+        where: eq(messages.fileId, fileId),
+        orderBy: [desc(messages.createdAt)],
+        offset: cursor ? cursor : 0,
+        limit,
       });
 
-      let nextCursor: typeof cursor | undefined = undefined;
-      if (messages.length > limit) {
-        const nextItem = messages.pop();
-        nextCursor = nextItem?.id;
-      }
+      let nextCursor = (cursor ? cursor : 0) + fileMessages.length;
 
       return {
-        messages,
+        fileMessages,
         nextCursor,
       };
     }),
@@ -144,11 +127,8 @@ export const appRouter = router({
   getFileUploadStatus: privateProcedure
     .input(z.object({ fileId: z.string() }))
     .query(async ({ input, ctx }) => {
-      const file = await db.file.findFirst({
-        where: {
-          id: input.fileId,
-          userId: ctx.userId,
-        },
+      const file = await db.query.files.findFirst({
+        where: and(eq(files.id, input.fileId), eq(files.userId, ctx.userId)),
       });
 
       if (!file) return { status: "PENDING" as const };
@@ -161,11 +141,8 @@ export const appRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { userId } = ctx;
 
-      const file = await db.file.findFirst({
-        where: {
-          key: input.key,
-          userId,
-        },
+      const file = await db.query.files.findFirst({
+        where: and(eq(files.key, input.key), eq(files.userId, userId)),
       });
 
       if (!file) throw new TRPCError({ code: "NOT_FOUND" });
@@ -178,20 +155,13 @@ export const appRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { userId } = ctx;
 
-      const file = await db.file.findFirst({
-        where: {
-          id: input.id,
-          userId,
-        },
+      const file = await db.query.files.findFirst({
+        where: and(eq(files.id, input.id), eq(files.userId, userId)),
       });
 
       if (!file) throw new TRPCError({ code: "NOT_FOUND" });
 
-      await db.file.delete({
-        where: {
-          id: input.id,
-        },
-      });
+      await db.delete(files).where(eq(files.id, input.id));
 
       return file;
     }),

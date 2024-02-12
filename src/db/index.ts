@@ -1,18 +1,11 @@
-import { PrismaClient } from '@prisma/client'
+import { Client } from "@planetscale/database";
+import { drizzle } from "drizzle-orm/planetscale-serverless";
 
-declare global {
-  // eslint-disable-next-line no-var
-  var cachedPrisma: PrismaClient
-}
+import * as schema from "./schema";
 
-let prisma: PrismaClient
-if (process.env.NODE_ENV === 'production') {
-  prisma = new PrismaClient()
-} else {
-  if (!global.cachedPrisma) {
-    global.cachedPrisma = new PrismaClient()
-  }
-  prisma = global.cachedPrisma
-}
-
-export const db = prisma
+export const db = drizzle(
+  new Client({
+    url: process.env.DATABASE_URL!,
+  }).connection(),
+  { schema }
+);
